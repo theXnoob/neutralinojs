@@ -2,6 +2,7 @@
 #define FILESYSTEM_H
 
 #include <string>
+#include <filesystem>
 
 #include "lib/json.hpp"
 
@@ -24,19 +25,19 @@ namespace fs {
     struct FileStats {
         bool hasError = false;
         string error;
-        long long size;
+        size_t size;
         bool isDirectory;
         bool isFile;
     }; 
 
-    bool createDirectory(string path);
-    bool removeFile(string filename);
-    fs::FileReaderResult readFile(string filename);
+    bool createDirectory(filesystem::path path);
+    bool removeFile(filesystem::path file);
+    fs::FileReaderResult readFile(string file);
     bool writeFile(fs::FileWriterOptions fileWriterOptions);
-    string getDirectoryName(string filename);
+    string getDirectoryName(string path);
     string getCurrentDirectory();
-    string getFullPathFromRelative(string path);
-    fs::FileStats getStats(string path);
+    string getAbsolutePathFromRelative(filesystem::path path);
+    fs::FileStats getStats(filesystem::path path);
 
 namespace controllers {
     json createDirectory(json input);

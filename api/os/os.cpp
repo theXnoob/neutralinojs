@@ -508,14 +508,14 @@ namespace controllers {
             #if defined(__linux__)
             string fullIconPath;
             if(loadResFromDir) {
-                fullIconPath = fs::getFullPathFromRelative(settings::joinAppPath("")) + iconPath;
+                fullIconPath = fs::getAbsolutePathFromRelative(settings::joinAppPath("")) + iconPath;
             }
             else {
                 string tempDirPath = settings::joinAppPath("/.tmp");
                 fs::createDirectory(tempDirPath);
                 string tempIconPath = settings::joinAppPath("/.tmp/tray_icon_linux.png");
                 resources::extractFile(iconPath, tempIconPath);
-                fullIconPath = fs::getFullPathFromRelative(tempIconPath);
+                fullIconPath = fs::getAbsolutePathFromRelative(tempIconPath);
             }
             tray.icon = helpers::cStrCopy(fullIconPath);
 

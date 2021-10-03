@@ -27,20 +27,12 @@ using namespace std;
 using json = nlohmann::json;
 
 namespace fs {
-    bool createDirectory(string path) {
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        return mkdir(path.c_str(), 0700) == 0;
-        #elif defined(_WIN32)
-        return CreateDirectory(path.c_str(), nullptr) == 1;
-        #endif
+    bool createDirectory(filesystem::path path) {
+        return filesystem::create_directory(path);
     }
     
-    bool removeFile(string filename) {
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        return remove(filename.c_str()) == 0;
-        #elif defined(_WIN32)
-        return DeleteFile(filename.c_str()) == 1;
-        #endif
+    bool removeFile(filesystem::path file) {
+        return filesystem::remove(file);
     }
     
     string getDirectoryName(string filename){
@@ -56,23 +48,11 @@ namespace fs {
     }
 
     string getCurrentDirectory() {
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        return getcwd(nullptr, 0);
-        #elif defined(_WIN32)
-        TCHAR currentDir[MAX_PATH];
-        GetCurrentDirectory(MAX_PATH, currentDir);   
-        std::string currentDirStr(currentDir);
-        std::replace(currentDirStr.begin(), currentDirStr.end(), '\\', '/');     
-        return currentDirStr;
-        #endif
+        return filesystem::current_path().string();
     }
     
-    string getFullPathFromRelative(string path) {
-        #if defined(__linux__)
-        return realpath(path.c_str(), nullptr);
-        #else
-        return path;
-        #endif
+    string getAbsolutePathFromRelative(filesystem::path path) {
+        return filesystem::absolute(path).string();
     }
     
     fs::FileReaderResult readFile(string filename) {
@@ -84,7 +64,7 @@ namespace fs {
             return fileReaderResult;
         }
         vector<char> buffer;
-        int size = reader.tellg();
+        size_t size = reader.tellg();
         reader.seekg(0, ios::beg);
         buffer.resize(size);
         reader.read(buffer.data(), size);
@@ -95,7 +75,7 @@ namespace fs {
         return fileReaderResult;
     }
 
-     bool writeFile(fs::FileWriterOptions fileWriterOptions) {
+    bool writeFile(fs::FileWriterOptions fileWriterOptions) {
         json output;
         ofstream writer(fileWriterOptions.filename);
         if(!writer.is_open())
@@ -105,39 +85,24 @@ namespace fs {
         return true;
     }
     
-    fs::FileStats getStats(string path) {
+    fs::FileStats getStats(filesystem::path path) {
         fs::FileStats fileStats;
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        struct stat statBuffer;
-        if(stat(path.c_str(), &statBuffer) == 0) {
-            fileStats.size = statBuffer.st_size;
-            fileStats.isFile = S_ISREG(statBuffer.st_mode);
-            fileStats.isDirectory = S_ISDIR(statBuffer.st_mode);
-        }
 
-        #elif defined(_WIN32)
-        HANDLE hFile = CreateFile(path.c_str(), GENERIC_READ, 
-                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 
-                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        error_code size_ec;
+        fileStats.size = filesystem::file_size(path, size_ec);
 
-        LARGE_INTEGER size;
-        FILE_BASIC_INFO basicInfo;
-        if(GetFileSizeEx(hFile, &size) && 
-            GetFileInformationByHandleEx(hFile, FileBasicInfo, &basicInfo, sizeof(basicInfo))
-        ) {
-            fileStats.size = size.QuadPart;
-            fileStats.isFile = !(basicInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY);
-            fileStats.isDirectory = basicInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY;
-        }
+        error_code dir_ec;
+        if(filesystem::is_directory(path, dir_ec))
+            fileStats.isDirectory = true;
+        else
+            fileStats.isFile = true;
 
-        #endif
-        else {
+        if(size_ec || dir_ec)
+        {
             fileStats.hasError = true;
-            fileStats.error = path + " doesn't exists or access error";
+            fileStats.error = path.string() + " doesn't exists or access error";
         }
-        #if defined(_WIN32)
-        CloseHandle(hFile);
-        #endif
+
         return fileStats;
     }
 
@@ -159,11 +124,7 @@ namespace controllers {
     json removeDirectory(json input) {
         json output;
         string path = input["path"];
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        if(rmdir(path.c_str()) == 0) {
-        #elif defined(_WIN32)
-        if(RemoveDirectory(path.c_str())) {
-        #endif
+        if(filesystem::remove(path)){
             output["success"] = true;
             output["message"] = "Directory " + path + " was removed";
         }
@@ -250,49 +211,27 @@ namespace controllers {
             output["error"] = helpers::makeErrorPayload("NE_FS_NOPATHE", fileStats.error);
             return output;
         }
-        
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        DIR *dirp;
-        struct dirent *directory;
-        dirp = opendir(path.c_str());
-        if (dirp) {
-            while ((directory = readdir(dirp)) != nullptr) {
+
+        if(filesystem::is_directory(path))
+        {
+            for(const auto& It : filesystem::directory_iterator(path))
+            {
+                const filesystem::path SubPath = It.path();
                 string type = "OTHER";
-                if(directory->d_type == DT_DIR)
+                if(filesystem::is_directory(SubPath))
                     type = "DIRECTORY";
-                else if(directory->d_type == DT_REG)
+                else if(filesystem::is_regular_file(SubPath))
                     type = "FILE";
+                
                 json file = {
-                    {"entry", directory->d_name},
+                    {"entry", SubPath.filename().string()},
                     {"type", type},
                 };
                 output["returnValue"].push_back(file);
             }
-            closedir(dirp);
             output["success"] = true;
         }
-        #elif defined(_WIN32)
-        string search_path = path + "/*.*";
-        WIN32_FIND_DATA fd;
-        HANDLE hFind = FindFirstFile(search_path.c_str(), &fd);
-        if(hFind != INVALID_HANDLE_VALUE) {
-            do {
-                string type = "OTHER";
-                if((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY)
-                    type = "DIRECTORY";
-                else
-                    type = "FILE";
-
-                json file = {
-                    {"entry", fd.cFileName},
-                    {"type", type}
-                };
-                output["returnValue"].push_back(file);
-            } while(FindNextFile(hFind, &fd));
-            FindClose(hFind);
-            output["success"] = true;
-        }
-        #endif
+        
         return output;
     }
    
@@ -300,14 +239,10 @@ namespace controllers {
         json output;
         string source = input["source"];
         string destination = input["destination"];
-        #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-        string command = "cp \"" + source + "\" \"" + destination + "\"";
-        string commandOutput = os::execCommand(command, true);
-        if(commandOutput.empty()) {
 
-        #elif defined(_WIN32)
-        if(CopyFile(source.c_str(), destination.c_str(), false) == 1) {
-        #endif
+        error_code copy_file_ec;
+        if(filesystem::copy_file(source, destination, copy_file_ec))
+        {
             output["success"] = true;
             output["message"] = "File copy operation was successful";
         }
